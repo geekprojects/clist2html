@@ -3,122 +3,20 @@
 #include <vector>
 #include <map>
 
+#include <getopt.h>
+
+#include "utils.h"
+
 using namespace std;
-
-bool shouldTrim(unsigned char ch)
-{
-    return std::isspace(ch) || std::iscntrl(ch);
-}
-
-inline void ltrim(std::string &s)
-{
-    s.erase(s.begin(), std::find_if(s.begin(), s.end(), [](unsigned char ch) {
-        return !shouldTrim(ch);
-    }));
-}
-
-inline void rtrim(std::string &s)
-{
-    s.erase(std::find_if(s.rbegin(), s.rend(), [](unsigned char ch) {
-        return !shouldTrim(ch);
-    }).base(), s.end());
-}
-
-inline void trim(std::string &s)
-{
-    rtrim(s);
-    ltrim(s);
-}
-
-vector<string> splitString(string line, char splitChar)
-{
-    vector<string> parts;
-
-    while (!line.empty())
-    {
-        size_t pos = line.find(splitChar);
-        if (pos == string::npos)
-        {
-            pos = line.length();
-            if (pos == 0)
-            {
-                break;
-            }
-        }
-        if (pos >= 1)
-        {
-            string part = line.substr(0, pos);
-            trim(part);
-            parts.push_back(part);
-        }
-        if (pos == line.length())
-        {
-            break;
-        }
-        line = line.substr(pos + 1);
-    }
-
-    return parts;
-}
-
-std::string joinToEnd(vector<string> parts, int startPos)
-{
-    std::string result;
-    for (unsigned int i = startPos; i < parts.size(); i++)
-    {
-        if (!result.empty())
-        {
-            result += " ";
-        }
-        result += parts.at(i);
-    }
-    return result;
-}
-
-struct Line
-{
-    string line;
-    vector<string> tokens;
-};
-
-vector<Line> readTextFile(const string& filename, bool split)
-{
-    vector<Line> result;
-    FILE* fd = fopen(filename.c_str(), "r");
-    if (fd == nullptr)
-    {
-        fprintf(stderr, "readTextFile: Failed to open file %s\n", filename.c_str());
-        return result;
-    }
-
-    char lineBuffer[2048];
-    while (fgets(lineBuffer, 2048, fd) != nullptr)
-    {
-        Line line;
-        line.line = lineBuffer;
-
-        // Skip UTF-8 BOM
-        if (line.line.length() >= 3 && (uint8_t)line.line.at(0) == 0xef && (uint8_t)line.line.at(1) == 0xbb && (uint8_t)line.line.at(2) == 0xbf)
-        {
-            line.line = line.line.substr(3);
-        }
-
-        trim(line.line);
-        if (split)
-        {
-            line.tokens = splitString(line.line, ':');
-        }
-        result.push_back(line);
-    }
-    fclose(fd);
-    return result;
-}
 
 string encode(string str)
 {
     str = std::regex_replace(str, std::regex("\\&"), "&amp;");
     str = std::regex_replace(str, std::regex("\\<"), "&lt;");
     str = std::regex_replace(str, std::regex("\\>"), "&gt;");
+
+    // Truncate long strings used for horizontal rules, titles etc
+    str = std::regex_replace(str, std::regex("([-_=]){3,}"), "$1$1$1");
 
     return str;
 }
@@ -131,7 +29,7 @@ struct Item
     string checkColour;
     string comment;
 
-    bool hasText()
+    [[nodiscard]] bool hasText() const
     {
         return !text.empty() || !check.empty();
     }
@@ -152,10 +50,13 @@ struct CheckLists
 
 CheckLists readCheckLists(std::string file)
 {
-     //vector<vector<string>> result = readTextFile("../Q4XP_clist.txt", true);
-    vector<Line> result = readTextFile(file, true);
-
     CheckLists checkLists;
+    vector<Line> result = readTextFile(file, true);
+    if (result.empty())
+    {
+        return checkLists;
+    }
+
     shared_ptr<CheckList> current = nullptr;
 
     for (auto line : result)
@@ -322,22 +223,74 @@ string cell(
     return td;
 }
 
+[[noreturn]] void usage(string argv0, int e)
+{
+    fprintf(stderr, "Usage: %s [options] <filename>\n", argv0.c_str());
+    fprintf(stderr, "Options:\n");
+    fprintf(stderr, "  --columns <n>       Number of columns to format lists in to (Optional)\n");
+    fprintf(stderr, "  --title <title>     Title to display at the top (Optional)\n");
+    fprintf(stderr, "  --output <filename> Filename of the output file (Optional)\n");
+
+    exit(e);
+}
+
 int main(int argc, char** argv)
 {
-    string clistFile;
-    if (argc != 2)
+    int columns = 2;
+    string title;
+    string clistHtml;
+    string argv0 = argv[0];
+
+    string optstr = "c:t:o:h";
+    vector<option> options;
+    options.push_back({"columns", required_argument, 0,  'c'});
+    options.push_back({"title", required_argument, 0,  't'});
+    options.push_back({"output", required_argument, 0,  'o'});
+    options.push_back({"help", no_argument, 0,  'h'});
+
+    optind = 0;
+    int ch;
+    while ((ch = getopt_long(argc, argv, optstr.c_str(), options.data(), nullptr)) != -1)
     {
-        //return 0;
-        clistFile = "../clist.txt";
-    }
-    else
-    {
-        clistFile = argv[1];
+        switch (ch)
+        {
+            case 'c':
+                columns = atoi(optarg);
+                break;
+            case 't':
+                title = optarg;
+                break;
+            case 'o':
+                clistHtml = optarg;
+                break;
+            case 'h':
+                usage(argv0, 0);
+            default:
+                usage(argv0, 1);
+        }
     }
 
+    argc -= optind;
+    argv += optind;
 
-    auto idx = clistFile.find_last_of(".");
-    string clistHtml = clistFile.substr(0, idx + 1) + "html";
+    if (argc < 1)
+    {
+        usage(argv0, 1);
+    }
+
+    string clistFile = argv[0];
+    if (clistHtml.empty())
+    {
+        auto idx = clistFile.find_last_of('.');
+        if (idx != string::npos)
+        {
+            clistHtml = clistFile.substr(0, idx + 1) + "html";
+        }
+        else
+        {
+            clistHtml = clistFile + ".html";
+        }
+    }
 
     auto checkLists = readCheckLists(clistFile);
 
@@ -352,10 +305,12 @@ int main(int argc, char** argv)
     fprintf(fd, "<head>\n");
     fprintf(fd, "<style>\n");
     fprintf(fd, "html * {font-family: monospace; }\n");
-    fprintf(fd, "table, th, td { border: 1px solid black; border-collapse: collapse; }\n");
+    fprintf(fd, "table, th, td { border: 1px solid black; border-collapse: collapse; margin-bottom: 20px; }\n");
     fprintf(fd, "tr:nth-child(odd) { background-color: #eeeeee; }\n");
+    fprintf(fd, ".title { font-size: 2em; }\n");
+    fprintf(fd, ".checkListContainer { column-count: %d; }\n", columns);
     fprintf(fd, ".checkList { width: 90%%; page-break-inside: avoid; }\n");
-    fprintf(fd, ".checkListTitle { background-color: #cccccc; font-size: 1.5em; }\n");
+    fprintf(fd, ".checkListTitle { background-color: #000; color: #ffffff; font-size: 1.3em; }\n");
     fprintf(fd, ".itemInfo { text-align: center; }\n");
     fprintf(fd, ".itemTest { text-align: left; }\n");
     fprintf(fd, ".itemCheck { text-align: right ; width: 1%%; white-space: nowrap; }\n");
@@ -363,6 +318,12 @@ int main(int argc, char** argv)
     fprintf(fd, "</head>\n");
     fprintf(fd, "<body>\n");
 
+    if (!title.empty())
+    {
+        fprintf(fd, "<h1 class=\"title\">%s</h1>\n", title.c_str());
+    }
+
+    fprintf(fd, "<div class=\"checkListContainer\">\n");
     for (const auto& comment : checkLists.comments)
     {
         fprintf(fd, "<!-- %s -->\n", encode(comment).c_str());
@@ -419,9 +380,9 @@ int main(int argc, char** argv)
             fprintf(fd, "</tr>");
         }
         fprintf(fd, "</table>\n");
-        fprintf(fd, "<br>\n");
     }
 
+    fprintf(fd, "</div>");
     fprintf(fd, "</body>");
     fprintf(fd, "</html>");
     fclose(fd);
