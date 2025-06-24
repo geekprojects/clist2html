@@ -18,10 +18,16 @@ Build using CMake. It has no other dependencies.
 Run the tool with the path clist.txt file:
 
 ```aiignore
-./clist2html clist.txt
+./clist2html [options] <clist.txt>
+
+Options:
+  --columns <n>       Number of columns to format lists in to (Optional, defaults to 2)
+  --title <title>     Title to display at the top (Optional)
+  --output <filename> Filename of the output file (Optional)
 ```
 
-The tool will generate an HTML file called clist.html
+Unless specified with --output, the tool will generate an HTML file with the original filename but the extention
+changed to .html.
 
 
 # License
